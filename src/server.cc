@@ -1,26 +1,38 @@
 
-#include<stdio.h>
-#include<unistd.h>
-#include<string.h>
-#include<arpa/inet.h>
-#include<sys/types.h>
-#include<sys/socket.h>
-#include<sys/stat.h>
-#include<bits/socket.h>
-#include<thread>
-#include<stdlib.h>
-#include<sys/wait.h>
-#include<sys/un.h>
-#include<ctype.h>
-#include<netinet/in.h>
-#include<sys/epoll.h>
-#include<iostream>
-#include<assert.h>
-#include<fcntl.h>
-#include<pthread.h>
+#include "server.h"
 
 
-void send_msg(int client,const int& model,const std::string& file_name=""){
+
+
+
+int setnonblocking(const int& fd){
+    int old_option = fcntl(fd,F_GETFL);
+    if(old_option==-1){
+        return old_option;
+    }
+    int new_option = old_option|O_NONBLOCK;
+    new_option = fcntl(fd,F_SETFL,new_option);
+    return new_option;
+}
+
+int addfd(const int& sockfd,const int& epoll_fd){
+    epoll_event event;
+    event.data.fd = sockfd;
+    event.events = EPOLLIN;
+    event.events|=EPOLLET;//设模式为RT（边沿触发）
+    if(epoll_ctl(epoll_fd,EPOLL_CTL_ADD,sockfd,&event)==-1){
+        return -1;
+    }
+    return setnonblocking(sockfd);
+}
+
+void removefd(const int& epoll,const int& fd){
+    epoll_ctl(epoll,EPOLL_CTL_DEL,fd,0);
+    close(fd);
+}
+
+
+void send_msg(int client,const int& model,const std::string& file_name){
     std::string s="";
     const std::string server_string="Server: myhttpsever/1.0.0\r\nContent-type: text/html;\r\n";
     switch(model){
@@ -252,26 +264,12 @@ void* server_deal_request(void* arg){
     return nullptr;
 }
 
-int setnonblocking(const int& fd){
-    int old_option = fcntl(fd,F_GETFL);
-    if(old_option==-1){
-        return old_option;
+struct http_request{
+    intptr_t r_fd;
+    void process(){
+        server_deal_request((void*)r_fd);
     }
-    int new_option = old_option|O_NONBLOCK;
-    new_option = fcntl(fd,F_SETFL,new_option);
-    return new_option;
-}//将fd对应的文件描述符设定为不阻塞
-
-int addfd(const int& sockfd,const int& epoll_fd){
-    epoll_event event;
-    event.data.fd = sockfd;
-    event.events = EPOLLIN;
-    //event.events|=EPOLLET;//设模式为RT（边沿触发）
-    if(epoll_ctl(epoll_fd,EPOLL_CTL_ADD,sockfd,&event)==-1){
-        return -1;
-    }
-    return setnonblocking(sockfd);
-}//将文件加进epoll的内核事件表，模式设为LT(水平触发)模式,一旦就绪立刻处理
+};
 
 short start_server(int *sockpd,uint16_t *port,const int &epoll_fd){
     struct sockaddr_in sock;//IPv4专用地址结构体
@@ -328,6 +326,7 @@ short server(uint16_t *port){
         return -1;
     }
     
+    thread_pool<http_request> pool;
 
     short flag = start_server(&sockpd,port,epoll_fd);
     if(!flag){
@@ -365,10 +364,9 @@ short server(uint16_t *port){
             }else{
                 if(events[i].events& EPOLLIN){
                     std::cout<<"第"<<i<<"个socket的标识符"<<sock_fd<<std::endl;
-                    if(pthread_create(&new_thread, NULL, server_deal_request, (void *)(intptr_t)sock_fd)){
-                        perror("pthread_create");
-                        return -1;
-                    }
+                    http_request *h_r = new http_request;
+                    h_r->r_fd = sock_fd;
+                    pool.append_request(h_r);
                 }else{
                     std::cout<<"处理epoll内核事件出错:事件不可读"<<std::endl;
                 }

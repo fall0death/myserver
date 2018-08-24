@@ -15,5 +15,13 @@
 
 all: example
 LIBS = -pthread #-lsocket
-example: src/server.cc
-	g++ -g -W -Wall $(LIBS) -o $@ $<
+
+example: src/server.cc src/server.h src/thread_pool.h src/locker.h 
+	g++ -std=c++11  -o example src/server.cc $(LIBS)  
+
+server.o:src/server.cc src/server.h src/thread_pool.h
+	g++ -std=c++11  -g -c src/server.cc 
+
+thread_pool.o:src/thread_pool.cc src/thread_pool.h src/locker.h 
+	g++ -std=c++11  -g -c src/thread_pool.cc  
+
